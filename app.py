@@ -12,7 +12,11 @@ from pdf_reader import (
     extract_template_field_value,
     get_ocr_status,
 )
-
+try:
+    from rapidocr_onnxruntime import RapidOCR
+except Exception as e:
+    import traceback
+    st.error(traceback.format_exc())
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL
 
