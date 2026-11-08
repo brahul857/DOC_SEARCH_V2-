@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # PDF Keyword & Value Finder
 
 A small Python + Streamlit project that lets you upload **one PDF at a time**, search for any keyword, view matching context with page numbers, and export results to CSV.
@@ -63,3 +64,6 @@ The values above are examples from the two GeM PDFs discussed when this project 
 - Automatic field extraction uses label patterns and is intentionally best-effort because PDF layouts differ. Keyword search and the page text preview let you verify the original wording.
 - Scanned PDFs may contain images rather than selectable text. OCR is not included in this starter version.
 - The application processes the uploaded file locally in the Streamlit session; it does not send the PDF to an external API.
+=======
+# DOC_SEARCH_V2-
+>>>>>>> origin/main
