@@ -12,12 +12,7 @@ from pdf_reader import (
     extract_template_field_value,
     get_ocr_status,
 )
-try:
-    from rapidocr_onnxruntime import RapidOCR
-except Exception as e:
-    import traceback
-    st.error(traceback.format_exc())
-from sqlalchemy import create_engine, inspect, text
+
 from sqlalchemy.engine import URL
 
 connection_url = URL.create(
@@ -284,16 +279,14 @@ if menu == "Search Saved Files":
 #     run_sla_extractor(set_page_config=False)
 #     st.stop()
 
-st.title("🔎 PDF Keyword & Value Finder")
-st.caption("Upload one PDF at a time, search any keyword, and inspect the matching text with page numbers.")
+st.title("📄 PDF Viewer & Text Extractor")
+st.caption("Upload a PDF to view it and inspect OCR/text extraction by page.")
 
 with st.sidebar:
     st.header("How to use")
     st.markdown(
         "1. Upload one PDF.\n"
-        "2. Enter a keyword such as `contract`, `seller`, `warranty`, `Canon`, or `value`.\n"
-        "3. Review matching snippets and extracted fields.\n"
-        "4. Download the results as CSV."
+        "2. View it in the PDF panel or inspect the extracted text by page."
     )
     st.info("Text-based PDFs work best. Scanned/image-only PDFs need OCR.")
 
@@ -301,6 +294,7 @@ with st.sidebar:
 st.subheader("Select template")
 selected_template_name = ""
 selected_template_keywords = []
+selected_template_id = None
 try:
     template_engine = create_engine(connection_url)
     inspector = inspect(template_engine)
@@ -324,20 +318,59 @@ try:
                 available_columns.get("keywords")
                 or available_columns.get("keyword")
             )
+            available_id_column = (
+                available_columns.get("templateid")
+                or available_columns.get("id")
+            )
             if available_name_column and available_keyword_column:
-                template_names = [
-                    str(value).strip()
-                    for value in available_templates[available_name_column].dropna()
+                template_rows = available_templates[
+                    available_templates[available_name_column].notna()
                 ]
-                selected_template_name = st.selectbox(
-                    "Template",
-                    options=["None"] + template_names,
+                duplicate_template_names = set(
+                    template_rows[available_name_column]
+                    .astype(str)
+                    .value_counts()
+                    .loc[lambda counts: counts > 1]
+                    .index
                 )
-                if selected_template_name != "None":
-                    selected_row = available_templates[
-                        available_templates[available_name_column].astype(str)
-                        == selected_template_name
-                    ].iloc[0]
+
+                def format_template_option(row_index):
+                    row = template_rows.loc[row_index]
+                    name = str(row[available_name_column]).strip()
+                    if (
+                        name in duplicate_template_names
+                        and available_id_column
+                        and pd.notna(row[available_id_column])
+                    ):
+                        return f"{name} (ID: {row[available_id_column]})"
+                    return name
+
+                selected_template_row_index = st.selectbox(
+                    "Template",
+                    options=[None] + template_rows.index.tolist(),
+                    format_func=lambda row_index: (
+                        "None"
+                        if row_index is None
+                        else format_template_option(row_index)
+                    ),
+                )
+                if selected_template_row_index is not None:
+                    selected_row = template_rows.loc[selected_template_row_index]
+                    selected_template_name = str(
+                        selected_row[available_name_column]
+                    ).strip()
+                    if available_id_column and pd.notna(
+                        selected_row[available_id_column]
+                    ):
+                        selected_template_id = int(
+                            selected_row[available_id_column]
+                        )
+                        st.caption(f"Selected template ID: {selected_template_id}")
+                    else:
+                        st.info(
+                            "The selected template has no recognized ID; "
+                            "its extracted values will be saved without a template mapping."
+                        )
                     selected_template_keywords = format_template_fields(
                         [str(selected_row[available_keyword_column] or "")]
                     )
@@ -405,32 +438,55 @@ st.caption(f"Saved as `{saved_pdf_path.name}` in `{FILES_DIR}`")
 st.success(f"Loaded one PDF successfully: {len(pages)} page(s). Upload another file to replace this one.")
 
 if selected_template_name and selected_template_name != "None":
-    st.subheader("Template keyword values")
+    st.subheader("Extracted template values")
     template_values_df = extract_template_keyword_values(
         pages,
         selected_template_keywords,
     )
-    st.dataframe(template_values_df, use_container_width=True, hide_index=True)
- 
+    extracted_template_values = template_values_df[
+        template_values_df["Value"] != "Not found"
+    ]
+    if extracted_template_values.empty:
+        st.info("No values were found for the selected template keywords.")
+    else:
+        st.dataframe(
+            extracted_template_values,
+            use_container_width=True,
+            hide_index=True,
+        )
 
-st.subheader("Automatically detected values")
-st.caption("These are best-effort label/value matches. Always verify them against the source PDF.")
 df_values = extract_labeled_values(pages)
 if not df_values.empty:
-    st.dataframe(df_values, use_container_width=True, hide_index=True)
-    df_values["PDF_File_Name"] = 'files//' + uploaded.name
-    df_values["PDF_File_Path"] = 'files//' + saved_pdf_path.name
+    values_to_save = df_values.copy()
+elif selected_template_name and selected_template_name != "None":
+    values_to_save = pd.DataFrame(
+        [{"Field": "Template", "Extracted value": selected_template_name}]
+    )
+else:
+    values_to_save = pd.DataFrame()
+
+if not values_to_save.empty:
+    values_to_save["PDF_File_Name"] = 'files//' + uploaded.name
+    values_to_save["PDF_File_Path"] = 'files//' + saved_pdf_path.name
+    values_to_save["Template_ID"] = selected_template_id
     try:
         engine = create_engine(connection_url, fast_executemany=True)
         table_name = "PDF_Keyword_Search"
 
         inspector = inspect(engine)
         if inspector.has_table(table_name):
+            table_columns = inspector.get_columns(table_name)
             existing_columns = {
-                column["name"].lower()
-                for column in inspector.get_columns(table_name)
+                re.sub(r"[^a-z0-9]+", "", column["name"].lower()): column["name"]
+                for column in table_columns
             }
-            if "pdf_file_name" not in existing_columns:
+            pdf_file_name_column = existing_columns.get(
+                "pdffilename", "PDF_File_Name"
+            )
+            pdf_file_path_column = existing_columns.get(
+                "pdffilepath", "PDF_File_Path"
+            )
+            if "pdffilename" not in existing_columns:
                 with engine.begin() as connection:
                     connection.execute(
                         text(
@@ -438,7 +494,7 @@ if not df_values.empty:
                             "ADD [PDF_File_Name] nvarchar(500) NULL"
                         )
                     )
-            if "pdf_file_path" not in existing_columns:
+            if "pdffilepath" not in existing_columns:
                 with engine.begin() as connection:
                     connection.execute(
                         text(
@@ -446,28 +502,46 @@ if not df_values.empty:
                             "ADD [PDF_File_Path] nvarchar(500) NULL"
                         )
                     )
+            template_id_column = existing_columns.get("templateid")
+            if template_id_column is None:
+                template_id_column = "Template_ID"
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE [{table_name}] "
+                            "ADD [Template_ID] int NULL"
+                        )
+                    )
+        else:
+            pdf_file_name_column = "PDF_File_Name"
+            pdf_file_path_column = "PDF_File_Path"
+            template_id_column = "Template_ID"
 
-        df_values.to_sql(
+        values_to_save.rename(
+            columns={
+                "PDF_File_Name": pdf_file_name_column,
+                "PDF_File_Path": pdf_file_path_column,
+                "Template_ID": template_id_column,
+            },
+            inplace=True,
+        )
+
+        values_to_save.to_sql(
             table_name,
             con=engine,
             if_exists="append",
             index=False,
+            dtype={template_id_column: Integer()},
         )
         st.success("Extracted values saved to SQL Server.")
     except Exception as exc:
         st.error(
             f"Could not save extracted values to SQL Server: {exc}"
         )
-   
-else:
-    st.info("No common labeled fields were detected automatically. Use keyword search below.")
 
-with st.expander("View extracted PDF text by page"):
-    for item in pages:
-        st.markdown(f"**Page {item['page']}**")
-        st.text_area(
-            f"Page {item['page']} text",
-            value=item["text"],
-            height=180,
-            key=f"page_{item['page']}"
-        )
+st.subheader("Uploaded PDF")
+st.pdf(
+    uploaded.getvalue(),
+    height=800,
+    alt=f"Uploaded PDF: {uploaded.name}",
+)
