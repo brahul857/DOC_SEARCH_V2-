@@ -13,6 +13,7 @@ from pdf_reader import (
     get_ocr_status,
 )
 
+from sqlalchemy import Integer, create_engine, inspect, text
 from sqlalchemy.engine import URL
 
 connection_url = URL.create(
