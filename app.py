@@ -259,7 +259,7 @@ menu = st.sidebar.radio(
 )
 
 if menu == "Template Management":
-    from template_management import run_template_management
+    from template_management_bak import run_template_management
 
     run_template_management(
         connection_url=connection_url,
