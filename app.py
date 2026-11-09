@@ -539,10 +539,3 @@ if not values_to_save.empty:
         st.error(
             f"Could not save extracted values to SQL Server: {exc}"
         )
-
-st.subheader("Uploaded PDF")
-st.pdf(
-    uploaded.getvalue(),
-    height=800,
-    alt=f"Uploaded PDF: {uploaded.name}",
-)
